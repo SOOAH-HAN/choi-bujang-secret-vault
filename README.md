@@ -20,9 +20,10 @@
    git fetch origin
    git grep -n -E "실습용 가상 [^ ]+ 기록" origin/main
    ```
-2. **배포 파일** (PowerShell): 세 줄 모두 `False`여야 합니다.
+2. **배포 파일** (PowerShell): 앞의 세 줄은 `False`, 마지막 `/api/notes` 줄은 `True`여야 합니다. 마지막 줄은 검색이 제대로 되는지 보는 대조입니다. 마지막이 `False`이면 한글 검색이 깨진 것이라 앞의 `False`도 믿을 수 없습니다. 첫 줄은 한글을 읽게 하는 설정이니 같이 실행하세요.
    ```
-   foreach ($p in '/', '/data.json', '/aleph.json') { "$p -> " + [bool]((curl.exe -s "<내 배포 주소>$p") -match '실습용 가상') }
+   [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+   foreach ($p in '/', '/data.json', '/aleph.json', '/api/notes') { "$p -> " + [bool]((curl.exe -s "<내 배포 주소>$p") -match '실습용 가상') }
    ```
 3. **검색이 믿을 만한지 대조**: 옛 공개 커밋에서는 걸려야 정상입니다(`data.json`과 `public/data.json`에 각 4줄). 여기서 0건이면 검색 방법이 틀린 것이라 1·2번의 0건도 믿을 수 없습니다. 한글 입력 문제일 수 있으니 `chcp 65001` 뒤에 다시 실행하거나, GitHub 저장소 검색 칸에서 같은 문장을 찾아 보세요.
    ```
@@ -47,7 +48,7 @@
 | GitHub 최신(`37ec184`) 검색 (1번) | 0건 (실행함) |
 | 옛 커밋 `dd089bb` 대조 검색 (3번) | 8줄 걸림: `data.json` 4줄, `public/data.json` 4줄 (실행함) |
 | 배포 `/data.json` HTTP 상태 | 404 (직접 요청해 확인함) |
-| 배포 `/`·`/data.json`·`/aleph.json` 문장 검색 (2번) | 세 곳 모두 `False` (학생이 직접 실행한 결과를 받아 기록). 같은 검색이 `/api/notes`에서는 `True`가 나오는지는 미확인 |
+| 배포 `/`·`/data.json`·`/aleph.json` 문장 검색 (2번) | **무효**: 한글 읽기 설정 없이 돌린 첫 검색은 세 곳 모두 `False`였지만, 같은 검색이 `/api/notes`에서도 `False`가 나와 검색이 깨져 있었음. 설정을 넣은 새 명령으로 다시 실행해야 함 (미실행) |
 | 배포 `/api/notes` (4번) | HTTP 200, 로그인 없이 가상 메모 네 건(`title`·`content`만)이 돌아옴. 공개 약점이 남아 있음 (학생이 직접 실행한 결과를 받아 기록) |
 
 ## 학생이 하는 일: 세 걸음 (1단계)
