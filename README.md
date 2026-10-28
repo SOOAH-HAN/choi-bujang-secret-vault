@@ -9,7 +9,8 @@
 - `aleph.config.json`의 `step`은 2입니다. 빌드는 `public/data.json`을 만들지 않고, 배포의 `/aleph.json`은 계속 만듭니다. `/data.json`을 열면 메모가 없어야 합니다.
 - **남은 약점**: `/api/notes`에는 로그인 확인이 없어 주소를 아는 누구나 부를 수 있습니다. 3단계에서 막기 전까지 가상 메모만 둡니다.
 - **남은 약점**: 이전 공개 커밋(`dd089bb`)과 옛 배포에는 가상 메모가 그대로 남아 있습니다. 확인 절차는 제작 3에서 적습니다.
-- 로컬 시험: `npm run test:notes`. 가상 요청 연습이며 실제 배포나 심판 판정이 아닙니다.
+- 로컬 시험: `npm run test:notes`, `npm run test:attack`, `npm run test:r5`. 가상 요청 연습이며 실제 배포나 심판 판정이 아닙니다. `npm run build -- --local`은 정적 결과물만 만들고 서버 함수나 배포를 증명하지 않습니다.
+- 제출 묶음: `npm run bundle`은 작업 트리가 깨끗하고 Git에 올리지 않는 `bundle-notes.json`이 있어야 합니다. `src/attack-check.mjs`가 배포 주소로 로그인 없는 요청을 직접 보내 결과를 적고, 요청을 보내지 못한 점검은 `미실행`으로 남깁니다. 심판의 판정이 아닙니다.
 
 ### 노출 확인 절차 (2단계)
 
@@ -63,7 +64,7 @@
 
 `vercel.json`은 정적 결과물 `public`을 배포합니다. 빌드 명령 `npm run build`는 Vercel이 제공하는 GitHub 저장소 소유자·이름, 커밋 SHA, 배포 URL을 검증하고 `public/aleph.json`을 생성합니다. 이 값이 없으면 빌드가 실패하므로, 성공한 것처럼 빈 주소를 내보내지 않습니다. `aleph.json`의 내용만으로 저장소 소유권이나 방어 성공을 인정하지 않습니다. 심판이 공개 저장소의 실제 커밋과 배포된 자료를 따로 대조해야 합니다.
 
-`aleph.config.json`의 `repoUrl`과 `publicAppUrl`은 이전 제출 묶음 방식의 자리표시자입니다. 1단계에서는 학생이 편집하지 않습니다. 2단계 이후 코딩 도구가 필요한 설정과 보호 기능을 단계별로 작성합니다. `npm run bundle`과 `bundle-notes.json`도 1단계의 세 걸음에는 포함되지 않습니다.
+`aleph.config.json`의 `repoUrl`과 `publicAppUrl`은 1단계에서는 자리표시자였고 학생이 편집하지 않습니다. 2단계 저장점에서 실제 저장소와 배포 주소로 채웠습니다. 2단계 이후 코딩 도구가 필요한 설정과 보호 기능을 단계별로 작성합니다. `npm run bundle`과 `bundle-notes.json`도 1단계의 세 걸음에는 포함되지 않습니다.
 
 로컬에서 가상 화면만 확인할 때는 `npm run build -- --local`을 사용합니다. 로컬 실행은 Vercel 배포나 심판 접수를 증명하지 않습니다. 저장소의 `src/attack-check.mjs`는 실제 배포가 된 뒤 `/data.json`을 비로그인으로 요청해 공개 가상 메모의 확인 표시를 읽습니다.
 
