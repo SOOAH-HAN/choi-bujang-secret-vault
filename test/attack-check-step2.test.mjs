@@ -60,7 +60,7 @@ test('step 2 reports exposed notes and unsent requests honestly', async () => {
 
 test('rejects placeholder addresses and unsupported steps', async () => {
   await assert.rejects(runAttackChecks({ ...config, publicAppUrl: 'https://replace-me.example' }));
-  await assert.rejects(runAttackChecks({ ...config, step: 4 }));
+  await assert.rejects(runAttackChecks({ ...config, step: 5 }));
 });
 
 // ---- 3단계 ----
@@ -125,4 +125,45 @@ test('step 3 reports a request that was not refused and unsent requests honestly
 
 test('step 3 needs identity provider info', async () => {
   await assert.rejects(runAttackChecks({ ...config3, identityProvider: undefined }));
+});
+
+// ---- 4단계 ----
+const config4 = { ...config3, step: 4 };
+const DATA_API = 'https://example-project.supabase.co/rest/v1/notes';
+
+test('step 4 adds a direct Data API check with only the public key', async () => {
+  const seen = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const target = new URL(String(url));
+    seen.push({ host: target.host, path: target.pathname, apikey: init.headers?.apikey ?? null });
+    if (target.host === 'example-project.supabase.co') {
+      return new Response('{"code":"42501","message":"permission denied"}',
+        { status: 401, headers: { 'content-type': 'application/json' } });
+    }
+    const hit = closedServer({ path: target.pathname }) ?? { status: 404, body: 'NOT_FOUND' };
+    return new Response(hit.body, { status: hit.status, headers: hit.json ? { 'content-type': 'application/json' } : {} });
+  };
+  const attempts = await runAttackChecks(config4);
+  assert.equal(attempts.length, 8);
+  const direct = attempts.at(-1);
+  assert.equal(direct.attackId, 'anon_direct_data_api');
+  assert.match(direct.observed, /^거부됨: HTTP 401, JSON/u);
+  const sent = seen.find((call) => call.host === 'example-project.supabase.co');
+  assert.equal(sent.path, '/rest/v1/notes');
+  assert.match(sent.apikey, /^sb_publishable_/u);
+  assert.ok(!JSON.stringify(attempts).includes('sb_publishable_'), '키를 결과에 싣지 않습니다');
+  assert.equal(DATA_API.includes('/rest/v1/notes'), true);
+});
+
+test('step 4 reports an open Data API and an unsent request honestly', async () => {
+  globalThis.fetch = async (url) => (new URL(String(url)).host === 'example-project.supabase.co'
+    ? new Response('[{"id":"x"}]', { status: 200, headers: { 'content-type': 'application/json' } })
+    : new Response('x', { status: 404 }));
+  const open = await runAttackChecks(config4);
+  assert.match(open.at(-1).observed, /^거부되지 않음: HTTP 200/u);
+  assert.ok(!JSON.stringify(open).includes('[{"id"'), '응답 본문을 싣지 않습니다');
+  globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
+  const unsent = await runAttackChecks(config4);
+  assert.equal(unsent.length, 8);
+  for (const item of unsent) assert.match(item.observed, /^미실행/u);
 });

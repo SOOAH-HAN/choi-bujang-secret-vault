@@ -3,6 +3,8 @@
 // 요청을 보내지 못한 점검은 '미실행'으로 남깁니다.
 // 토큰, 개인키, 실명, 메모 본문은 결과에 넣지 않습니다.
 
+import { readFileSync } from 'node:fs';
+
 // 가상 메모 문장 모양입니다. 저장소 검색에 이 파일이 걸리지 않도록 조각으로 만듭니다.
 const MEMO_SENTENCE = new RegExp(`${['실습용', '가상'].join(' ')} \\S+ ${'기록'}`, 'u');
 
@@ -156,9 +158,31 @@ async function thirdStage(config, app) {
   return attempts;
 }
 
+// 4단계: 앱을 거치지 않고 DB에 직접(Data API) 묻습니다. 화면 코드에 이미 공개된 publishable(anon) 키만 씁니다.
+// 서버 전용 비밀 키나 로그인 토큰은 쓰지 않습니다. 키를 찾지 못하면 보내지 않고 미실행으로 남깁니다.
+async function directDataApi(config, app) {
+  const attack = { attackId: 'anon_direct_data_api',
+    expected: '공개 키(anon)로 DB에 직접 메모를 요청하면 401 또는 403으로 거부됨' };
+  let origin;
+  let key = null;
+  try {
+    origin = new URL(config.identityProvider.issuer).origin;
+    const page = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+    key = page.match(/sb_publishable_[A-Za-z0-9_-]+/u)?.[0] ?? null;
+  } catch {
+    key = null;
+  }
+  if (!key) return { ...attack, observed: '미실행: 화면 코드에서 공개 키를 찾지 못해 보내지 않음' };
+  const result = await request(app, `${origin}/rest/v1/notes?select=id`, { headers: { apikey: key } });
+  return { ...attack, observed: rejection(result) };
+}
+
 export async function runAttackChecks(config) {
-  if (![1, 2, 3].includes(config.step)) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
+  if (![1, 2, 3, 4].includes(config.step)) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
   const app = appUrl(config);
   if (config.step === 1) return firstStage(config, app);
-  return config.step === 2 ? secondStage(app) : thirdStage(config, app);
+  if (config.step === 2) return secondStage(app);
+  const attempts = await thirdStage(config, app);
+  if (config.step === 4) attempts.push(await directDataApi(config, app));
+  return attempts;
 }
