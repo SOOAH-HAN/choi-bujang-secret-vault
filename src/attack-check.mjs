@@ -177,12 +177,28 @@ async function directDataApi(config, app) {
   return { ...attack, observed: rejection(result) };
 }
 
+// 5단계: 공개 화면과 /aleph.json에 서버 전용 키가 새어 있지 않은지 봅니다. 값은 결과에 싣지 않고 있는지 여부만 적습니다.
+// 새 형식 비밀 키(sb_secret_…)와 JWT 모양의 긴 토큰(옛 service_role 키 포함)을 찾습니다.
+const SECRET_SHAPES = [/sb_secret_[A-Za-z0-9_-]{8,}/u, /eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{10,}/u];
+
+async function staticSecrets(app) {
+  const attack = { attackId: 'static_server_key_search',
+    expected: '공개 화면 HTML과 /aleph.json에 서버 전용 키나 토큰 모양의 문자열이 없음' };
+  const pages = [await request(app, '/'), await request(app, '/aleph.json')];
+  const blocked = pages.find((page) => !page.sent);
+  if (blocked) return { ...attack, observed: notRun(blocked) };
+  const found = pages.some((page) => SECRET_SHAPES.some((shape) => shape.test(page.text)));
+  return { ...attack, observed: found ? '공개 파일에 서버 전용 키나 토큰 모양의 문자열이 보임'
+    : `HTTP ${pages[0].status}·${pages[1].status}: 두 공개 파일에 서버 전용 키나 토큰 모양의 문자열이 보이지 않음` };
+}
+
 export async function runAttackChecks(config) {
-  if (![1, 2, 3, 4].includes(config.step)) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
+  if (![1, 2, 3, 4, 5].includes(config.step)) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
   const app = appUrl(config);
   if (config.step === 1) return firstStage(config, app);
   if (config.step === 2) return secondStage(app);
   const attempts = await thirdStage(config, app);
-  if (config.step === 4) attempts.push(await directDataApi(config, app));
+  if (config.step >= 4) attempts.push(await directDataApi(config, app));
+  if (config.step >= 5) attempts.push(await staticSecrets(app));
   return attempts;
 }

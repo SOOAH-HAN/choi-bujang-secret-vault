@@ -2,7 +2,18 @@
 
 이 저장소는 1단계에서 학생 본인이 GitHub 저장소와 Vercel 배포를 만드는 출발점입니다. 포함된 메모 네 건은 가상 자료입니다. 실제 학생 자료, 토큰, 비밀키를 넣지 마세요.
 
-## 4단계: 로그인해도 내 자료만 보임 (현재 상태)
+## 5단계: 자료 요청을 서버 한곳으로 모음 (현재 상태)
+
+- 브라우저의 메모 읽기·추가·수정·삭제는 모두 Vercel 서버 함수(`/api/notes`, `/api/notes/:id`)로만 갑니다. 화면 코드(`public/index.html`)가 Supabase를 직접 부르는 곳은 로그인·로그아웃·세션 확인(`auth`)뿐이고, 메모 자료를 직접 읽거나 고치는 곳은 없습니다(찾아봤고 없음). 그래서 제작 1에서는 파일을 바꾸지 않았습니다.
+- DB(학습용 Supabase `public.notes`): `PUBLIC`·`anon`·`authenticated`의 직접 권한이 모두 없습니다. 서버 함수는 서버 전용 비밀 키(`service_role`)로만 접속합니다. 서버 함수의 로그인·소유자 검사는 그대로입니다. RLS 정책 네 개도 남아 있어, 나중에 권한이 다시 열려도 본인 행만 허용되는 두 번째 방어선이 됩니다. 적용한 SQL은 `supabase/*.local.sql`에 있고 Git에는 올리지 않습니다.
+- `aleph.config.json`: `step`은 5, `originalApiUrl`은 쿼리 없는 원본 자료 HTTPS 경로(`…supabase.co/rest/v1/notes`)입니다. 허용 경로(`allowedRoutes`)와 로그인 발급자 정보는 4단계와 같습니다.
+- 확인한 것: 학생이 직접 실행한 DB 권한 확인에서 `anon`·`authenticated`는 SELECT·INSERT·UPDATE·DELETE가 모두 `false`, `service_role`은 모두 `true`. 공개(anon) 키로 DB에 직접 요청하면 `401`(`permission denied for table notes`)(4단계에서 확인). 시험 계정 A·B로 화면에서 각자 자기 메모 읽기·추가·수정·삭제가 정상.
+- 확인하지 못한 것: 로그인 토큰(`authenticated`)으로 실제 직접 요청을 보내 본 시험은 하지 않았습니다. 권한 표로만 확인했습니다. 심판의 재현도 아닙니다.
+- 남은 약점: 화면 코드에 Supabase 공개 키(`sb_publishable_…`)가 있습니다. 로그인(Auth)을 브라우저가 직접 부르기 때문이고, 공개용 키이며 DB 직접 접근 권한은 없습니다. 이전 공개 커밋(`dd089bb`)과 옛 배포에는 가상 메모가 그대로 남아 있습니다.
+- 다시 실행: `npm run test:notes`, `npm run test:attack`, `npm run test:r5`. 가상 요청 연습이며 실제 배포나 심판 판정이 아닙니다.
+- 제출 묶음: `npm run bundle`은 4단계 점검에 더해 공개 화면 HTML과 `/aleph.json`에 서버 전용 키·토큰 모양의 문자열이 있는지 봅니다(있는지 여부만 기록하고 값은 싣지 않음). 요청을 보내지 못하면 `미실행`으로 남습니다.
+
+## 4단계: 로그인해도 내 자료만 보임 (이전 단계)
 
 - 서버 함수(`src/notes-service.mjs`)는 읽기·추가·수정·삭제를 모두 본인 메모로 제한합니다. 한 건 요청은 DB에 `id`와 `owner_id`(검증된 사용자)를 함께 걸고, 돌아온 행의 주인도 다시 비교합니다. 추가할 때 주인은 검증된 사용자 ID로만 저장하며 URL·본문의 소유자 값은 믿지 않습니다.
 - 남의 메모에 대한 읽기·수정·삭제는 없는 메모와 같은 `404`입니다. 수정 본문에 `owner_id`·`userId` 같은 소유자 값이 있으면 `403`(`OWNER_CHANGE_FORBIDDEN`)으로 거부하고 소유자는 바뀌지 않습니다.

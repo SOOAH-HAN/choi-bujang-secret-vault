@@ -60,7 +60,7 @@ test('step 2 reports exposed notes and unsent requests honestly', async () => {
 
 test('rejects placeholder addresses and unsupported steps', async () => {
   await assert.rejects(runAttackChecks({ ...config, publicAppUrl: 'https://replace-me.example' }));
-  await assert.rejects(runAttackChecks({ ...config, step: 5 }));
+  await assert.rejects(runAttackChecks({ ...config, step: 6 }));
 });
 
 // ---- 3단계 ----
@@ -165,5 +165,45 @@ test('step 4 reports an open Data API and an unsent request honestly', async () 
   globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
   const unsent = await runAttackChecks(config4);
   assert.equal(unsent.length, 8);
+  for (const item of unsent) assert.match(item.observed, /^미실행/u);
+});
+
+// ---- 5단계 ----
+const config5 = { ...config4, step: 5 };
+const fakeKeyShape = ['sb', 'secret', 'abcdefgh12345678'].join('_');
+
+test('step 5 also searches public files for server key shapes without printing them', async () => {
+  globalThis.fetch = async (url) => {
+    const target = new URL(String(url));
+    if (target.host === 'example-project.supabase.co') {
+      return new Response('{"code":"42501"}', { status: 401, headers: { 'content-type': 'application/json' } });
+    }
+    const hit = closedServer({ path: target.pathname });
+    return hit ? new Response(hit.body, { status: hit.status, headers: hit.json ? { 'content-type': 'application/json' } : {} })
+      : new Response('NOT_FOUND', { status: 404 });
+  };
+  const clean = await runAttackChecks(config5);
+  assert.equal(clean.length, 9);
+  assert.equal(clean.at(-1).attackId, 'static_server_key_search');
+  assert.match(clean.at(-1).observed, /보이지 않음/u);
+
+  const leaky = (path, body) => async (url) => {
+    const target = new URL(String(url));
+    if (target.host === 'example-project.supabase.co') return new Response('{}', { status: 401, headers: { 'content-type': 'application/json' } });
+    if (target.pathname === path) return new Response(body, { status: 200 });
+    const hit = closedServer({ path: target.pathname });
+    return hit ? new Response(hit.body, { status: hit.status, headers: hit.json ? { 'content-type': 'application/json' } : {} })
+      : new Response('NOT_FOUND', { status: 404 });
+  };
+  for (const body of [`var k="${fakeKeyShape}"`, `t=${['eyJ', 'hbGciOiJIUzI1NiJ9'].join('')}.${['eyJ', 'yb2xlIjoic2VydmljZSJ9'].join('')}.abcdefghijkl`]) {
+    globalThis.fetch = leaky('/', body);
+    const leaked = await runAttackChecks(config5);
+    assert.match(leaked.at(-1).observed, /보임$/u);
+    assert.ok(!JSON.stringify(leaked).includes('abcdefgh'), '값을 결과에 싣지 않습니다');
+  }
+
+  globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
+  const unsent = await runAttackChecks(config5);
+  assert.equal(unsent.length, 9);
   for (const item of unsent) assert.match(item.observed, /^미실행/u);
 });
