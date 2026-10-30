@@ -20,14 +20,17 @@ function appUrl(config) {
   return app;
 }
 
-// 로그인 정보 없이 요청합니다. 보내지 못하면 이유만 돌려줍니다.
-async function request(app, path) {
+// 로그인 정보 없이(또는 일부러 잘못된 토큰으로) 요청합니다. 보내지 못하면 이유만 돌려줍니다.
+async function request(app, path, { method = 'GET', headers, body } = {}) {
   try {
     const response = await fetch(new URL(path, app), {
-      redirect: 'error', signal: AbortSignal.timeout(10000),
+      method, redirect: 'error', signal: AbortSignal.timeout(10000),
+      headers: body === undefined ? headers : { 'Content-Type': 'application/json', ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = (await response.text()).slice(0, 200000);
-    return { sent: true, status: response.status, text };
+    return { sent: true, status: response.status, text,
+      json: (response.headers.get('content-type') ?? '').includes('application/json') };
   } catch (error) {
     return { sent: false, reason: error?.name === 'TimeoutError' ? '시간 초과' : '연결 실패' };
   }
@@ -38,7 +41,8 @@ const notRun = (result) => `미실행: 요청을 보내지 못함 (${result.reas
 function noteCount(text) {
   try {
     const data = JSON.parse(text);
-    return Array.isArray(data?.notes) ? data.notes.length : null;
+    const notes = Array.isArray(data) ? data : data?.notes;
+    return Array.isArray(notes) ? notes.length : null;
   } catch {
     return null;
   }
@@ -63,9 +67,9 @@ async function firstStage(config, app) {
     observed: visible ? '비로그인 요청에서 공개 가상 메모 확인 표시가 보임' : `비로그인 요청에서 확인 표시가 보이지 않음 (HTTP ${response.status})` }];
 }
 
-async function secondStage(app) {
+// 2단계부터 이어지는 공개 파일 점검: /data.json이 없고, 화면과 /aleph.json에 메모 문장이 없어야 합니다.
+async function staticAttempts(app) {
   const attempts = [];
-
   const data = await request(app, '/data.json');
   let dataObserved;
   if (!data.sent) {
@@ -88,7 +92,11 @@ async function secondStage(app) {
     observed: blocked ? notRun(blocked)
       : pages.some((page) => MEMO_SENTENCE.test(page.text)) ? '공개 파일에 가상 메모 문장이 보임'
         : `HTTP ${pages[0].status}·${pages[1].status}: 두 공개 파일에 가상 메모 문장이 보이지 않음` });
+  return attempts;
+}
 
+async function secondStage(app) {
+  const attempts = await staticAttempts(app);
   const api = await request(app, '/api/notes');
   let apiObserved;
   if (!api.sent) {
@@ -104,8 +112,53 @@ async function secondStage(app) {
   return attempts;
 }
 
+// 서명이 없는 가짜 토큰입니다. 비밀 키를 쓰지 않으며 서명 칸은 아무 글자입니다.
+function fakeToken(claims) {
+  const part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${part({ alg: 'ES256', typ: 'JWT' })}.${part(claims)}.${Buffer.from('not-a-real-signature').toString('base64url')}`;
+}
+
+// 거부되어야 하는 요청이 실제로 거부되는지 봅니다 (401·403과 JSON 오류 문구).
+function rejection(result) {
+  if (!result.sent) return notRun(result);
+  const refused = result.status === 401 || result.status === 403;
+  if (refused && result.json) return `거부됨: HTTP ${result.status}, JSON 오류 문구`;
+  if (refused) return `HTTP ${result.status}로 거부됐지만 응답이 JSON이 아님`;
+  return `거부되지 않음: HTTP ${result.status}`;
+}
+
+async function thirdStage(config, app) {
+  const provider = config.identityProvider;
+  if (typeof provider?.issuer !== 'string' || typeof provider?.audience !== 'string') {
+    throw new Error('aleph.config.json의 identityProvider에 발급자와 대상을 먼저 적어 주세요.');
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const claims = { iss: provider.issuer, aud: provider.audience, role: 'authenticated',
+    sub: '99999999-9999-4999-8999-999999999999', iat: now, exp: now + 600 };
+  const withToken = (token) => ({ headers: { Authorization: `Bearer ${token}` } });
+  const attempts = await staticAttempts(app);
+
+  const attacks = [
+    ['anonymous_note_add', '로그인 없이 메모를 추가하면 거부됨',
+      ['/api/notes', { method: 'POST', body: { title: '공격 점검', body: '가상 요청' } }]],
+    ['anonymous_notes_list', '로그인 토큰 없이 메모 목록을 요청하면 401 또는 403과 JSON 오류 문구',
+      ['/api/notes']],
+    ['forged_signature_token', '서명이 위조된 로그인 토큰으로 요청하면 거부됨',
+      ['/api/notes', withToken(fakeToken(claims))]],
+    ['expired_token', '만료된 로그인 토큰으로 요청하면 거부됨',
+      ['/api/notes', withToken(fakeToken({ ...claims, iat: now - 7200, exp: now - 3600 }))]],
+    ['wrong_audience_token', '다른 서비스용으로 발급된 로그인 토큰으로 요청하면 거부됨',
+      ['/api/notes', withToken(fakeToken({ ...claims, aud: 'another-service' }))]],
+  ];
+  for (const [attackId, expected, [path, init]] of attacks) {
+    attempts.push({ attackId, expected, observed: rejection(await request(app, path, init)) });
+  }
+  return attempts;
+}
+
 export async function runAttackChecks(config) {
-  if (config.step !== 1 && config.step !== 2) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
+  if (![1, 2, 3].includes(config.step)) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
   const app = appUrl(config);
-  return config.step === 1 ? firstStage(config, app) : secondStage(app);
+  if (config.step === 1) return firstStage(config, app);
+  return config.step === 2 ? secondStage(app) : thirdStage(config, app);
 }

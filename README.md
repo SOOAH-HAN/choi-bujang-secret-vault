@@ -2,12 +2,23 @@
 
 이 저장소는 1단계에서 학생 본인이 GitHub 저장소와 Vercel 배포를 만드는 출발점입니다. 포함된 메모 네 건은 가상 자료입니다. 실제 학생 자료, 토큰, 비밀키를 넣지 마세요.
 
-## 2단계: 자료를 코드 밖으로 옮김 (현재 상태)
+## 3단계: 진짜 로그인 (현재 상태)
+
+- 화면(`public/index.html`)에서 Supabase Auth 이메일·비밀번호로 로그인·로그아웃합니다. 로그인한 사람만 메모를 추가·수정·삭제하고 목록을 봅니다. 로그인 전에는 서버에 요청도 보내지 않습니다.
+- 서버 함수 `api/notes.js`, `api/notes/[id].js`(구현은 `src/notes-service.mjs`)는 `Authorization: Bearer <토큰>`을 시작 틀의 도우미 `src/verify-login.mjs`로 검사합니다. 도우미는 고치지 않았습니다. 토큰이 없거나 위조·만료·다른 대상용이면 `401`과 JSON 오류 문구(`LOGIN_REQUIRED`)를 돌려줍니다. 브라우저가 보내는 `userId`·`role`은 믿지 않고, 메모의 주인은 검사가 끝난 토큰의 사용자 ID로만 정합니다.
+- 허용 경로(`aleph.config.json`의 `allowedRoutes`): `GET /api/notes`, `POST /api/notes`, `GET`·`PUT`·`DELETE /api/notes/:id`. 발급자 정보(`identityProvider`)는 Supabase 프로젝트의 Auth 주소입니다. 화면에 있는 Project URL과 publishable key는 공개용이고, 서버 전용 비밀 키는 Vercel 환경변수에만 있습니다.
+- `aleph.config.json`의 `step`은 3입니다. 응답에는 `X-Content-Type-Options: nosniff`(`vercel.json`)가 붙고, `/aleph.json`은 계속 열립니다.
+- **남은 약점**: 소유자 검사가 아직 없습니다. 로그인한 사람은 다른 사람 메모의 번호(id)를 알면 고치거나 지울 수 있습니다. 목록은 자기 메모만 보이지만 번호로 직접 부르는 길은 열려 있습니다. 4단계에서 막습니다.
+- **남은 약점**: 이전 공개 커밋(`dd089bb`)과 옛 배포에는 가상 메모가 그대로 남아 있습니다. 처음의 가상 메모 네 건은 주인(`owner_id`)이 없어 지금 화면에는 보이지 않습니다.
+- 다시 실행: `npm run test:notes`(서버 함수, 가짜 Supabase), `npm run test:attack`(자기 점검 코드), `npm run test:r5`. 가상 요청 연습이며 실제 배포나 심판 판정이 아닙니다. 배포 확인은 `curl.exe -s -i <내 배포 주소>/api/notes`가 로그인 없이 `401`과 JSON 오류 문구를 주는지 봅니다.
+- 제출 묶음: `npm run bundle`은 작업 트리가 깨끗하고 Git에 올리지 않는 `bundle-notes.json`이 있어야 합니다. `src/attack-check.mjs`가 배포 주소로 직접 보낸 요청의 결과만 적습니다. 로그인 없는 추가·조회와 일부러 만든 가짜 토큰(위조 서명·만료·다른 대상) 요청이 거부되는지 보고, 요청을 보내지 못하면 `미실행`으로 남깁니다. 심판의 판정이 아닙니다.
+
+## 2단계: 자료를 코드 밖으로 옮김 (이전 단계)
 
 - 가상 메모 네 건은 저장소와 `public/`에서 빠졌고, 학습용 Supabase 테이블 `notes`에 있습니다. 테이블을 만드는 SQL은 메모 본문이 들어 있어 Git에 올리지 않습니다.
 - 화면(`public/index.html`)은 서버 함수 `/api/notes`(`api/notes.js`)로 메모를 읽습니다. 함수는 Vercel 환경변수 `SUPABASE_URL`과 서버 전용 `SUPABASE_SECRET_KEY`를 서버에서만 읽습니다. 값은 Vercel 설정의 비밀 입력란에 직접 넣고 코드·Git·로그·응답에 두지 않습니다.
 - `aleph.config.json`의 `step`은 2입니다. 빌드는 `public/data.json`을 만들지 않고, 배포의 `/aleph.json`은 계속 만듭니다. `/data.json`을 열면 메모가 없어야 합니다.
-- **남은 약점**: `/api/notes`에는 로그인 확인이 없어 주소를 아는 누구나 부를 수 있습니다. 3단계에서 막기 전까지 가상 메모만 둡니다.
+- (2단계 당시) `/api/notes`에는 로그인 확인이 없었고 3단계에서 막았습니다.
 - **남은 약점**: 이전 공개 커밋(`dd089bb`)과 옛 배포에는 가상 메모가 그대로 남아 있습니다. 확인 절차는 제작 3에서 적습니다.
 - 로컬 시험: `npm run test:notes`, `npm run test:attack`, `npm run test:r5`. 가상 요청 연습이며 실제 배포나 심판 판정이 아닙니다. `npm run build -- --local`은 정적 결과물만 만들고 서버 함수나 배포를 증명하지 않습니다.
 - 제출 묶음: `npm run bundle`은 작업 트리가 깨끗하고 Git에 올리지 않는 `bundle-notes.json`이 있어야 합니다. `src/attack-check.mjs`가 배포 주소로 로그인 없는 요청을 직접 보내 결과를 적고, 요청을 보내지 못한 점검은 `미실행`으로 남깁니다. 심판의 판정이 아닙니다.
@@ -30,7 +41,7 @@
    ```
    git grep -n -E "실습용 가상 [^ ]+ 기록" dd089bb
    ```
-4. **공개 API** (남은 약점의 확인): 로그인 없이 메모가 돌아오면 아직 열려 있는 것입니다.
+4. **공개 API** (3단계부터는 `401`과 JSON 오류 문구가 나와야 정상): 메모가 돌아오면 아직 열려 있는 것입니다.
    ```
    curl.exe -s <내 배포 주소>/api/notes
    ```
@@ -40,7 +51,7 @@
 - 현재 최신 파일과 현재 배포만 봅니다. 과거 노출이 해소됐다는 뜻이 아닙니다.
 - 옛 공개 커밋 `dd089bb`에는 메모가 그대로 남아 있습니다. Git 이력은 지우지 않았습니다.
 - Vercel의 이전 배포는 삭제하기 전까지 남을 수 있습니다. 이 절차는 이전 배포를 확인하지 않습니다.
-- `/api/notes`는 로그인 없이 메모를 돌려줍니다. 3단계에서 막기 전까지 가상 메모만 둡니다.
+- `/api/notes`는 2단계 당시 로그인 없이 메모를 돌려줬고, 3단계에서 `401`로 막았습니다(아래 기록은 2단계 시점).
 
 **확인 기록 (2026-10-28)**
 
@@ -64,7 +75,7 @@
 
 `vercel.json`은 정적 결과물 `public`을 배포합니다. 빌드 명령 `npm run build`는 Vercel이 제공하는 GitHub 저장소 소유자·이름, 커밋 SHA, 배포 URL을 검증하고 `public/aleph.json`을 생성합니다. 이 값이 없으면 빌드가 실패하므로, 성공한 것처럼 빈 주소를 내보내지 않습니다. `aleph.json`의 내용만으로 저장소 소유권이나 방어 성공을 인정하지 않습니다. 심판이 공개 저장소의 실제 커밋과 배포된 자료를 따로 대조해야 합니다.
 
-`aleph.config.json`의 `repoUrl`과 `publicAppUrl`은 1단계에서는 자리표시자였고 학생이 편집하지 않습니다. 2단계 저장점에서 실제 저장소와 배포 주소로 채웠습니다. 2단계 이후 코딩 도구가 필요한 설정과 보호 기능을 단계별로 작성합니다. `npm run bundle`과 `bundle-notes.json`도 1단계의 세 걸음에는 포함되지 않습니다.
+`aleph.config.json`의 `repoUrl`과 `publicAppUrl`은 1단계에서는 자리표시자였고 학생이 편집하지 않습니다. 2단계 저장점에서 실제 저장소와 배포 주소로 채웠고, 3단계에서 로그인 발급자와 허용 경로를 더했습니다. 2단계 이후 코딩 도구가 필요한 설정과 보호 기능을 단계별로 작성합니다. `npm run bundle`과 `bundle-notes.json`도 1단계의 세 걸음에는 포함되지 않습니다.
 
 로컬에서 가상 화면만 확인할 때는 `npm run build -- --local`을 사용합니다. 로컬 실행은 Vercel 배포나 심판 접수를 증명하지 않습니다. 저장소의 `src/attack-check.mjs`는 실제 배포가 된 뒤 `/data.json`을 비로그인으로 요청해 공개 가상 메모의 확인 표시를 읽습니다.
 

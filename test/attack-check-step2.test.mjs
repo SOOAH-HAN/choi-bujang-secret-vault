@@ -60,5 +60,69 @@ test('step 2 reports exposed notes and unsent requests honestly', async () => {
 
 test('rejects placeholder addresses and unsupported steps', async () => {
   await assert.rejects(runAttackChecks({ ...config, publicAppUrl: 'https://replace-me.example' }));
-  await assert.rejects(runAttackChecks({ ...config, step: 3 }));
+  await assert.rejects(runAttackChecks({ ...config, step: 4 }));
+});
+
+// ---- 3단계 ----
+const config3 = {
+  ...config,
+  step: 3,
+  identityProvider: { issuer: 'https://example-project.supabase.co/auth/v1', audience: 'authenticated' },
+};
+
+function fakeServer(handle) {
+  const seen = [];
+  globalThis.fetch = async (url, init = {}) => {
+    assert.equal(init.redirect, 'error');
+    const path = new URL(String(url)).pathname;
+    const call = { path, method: init.method ?? 'GET', auth: init.headers?.Authorization ?? null };
+    seen.push(call);
+    const hit = handle(call) ?? { status: 404, body: 'NOT_FOUND' };
+    return new Response(hit.body, { status: hit.status,
+      headers: hit.json ? { 'content-type': 'application/json' } : {} });
+  };
+  return seen;
+}
+
+const refuse = { status: 401, json: true, body: '{"error":"LOGIN_REQUIRED"}' };
+const closedServer = (call) => {
+  if (call.path === '/api/notes') return refuse;
+  if (call.path === '/') return { status: 200, body: '<html>화면</html>' };
+  if (call.path === '/aleph.json') return { status: 200, body: '{"step":3}' };
+  return undefined;
+};
+
+test('step 3 records refusals of anonymous and fake-token requests', async () => {
+  const seen = fakeServer(closedServer);
+  const attempts = await runAttackChecks(config3);
+  assert.deepEqual(attempts.map((item) => item.attackId), [
+    'static_data_json_removed', 'static_pages_note_text', 'anonymous_note_add', 'anonymous_notes_list',
+    'forged_signature_token', 'expired_token', 'wrong_audience_token']);
+  for (const item of attempts.slice(2)) assert.match(item.observed, /^거부됨: HTTP 401, JSON/u);
+  assert.ok(seen.some((call) => call.method === 'POST' && call.auth === null));
+  assert.equal(seen.filter((call) => call.auth?.startsWith('Bearer ')).length, 3);
+  const text = JSON.stringify(attempts);
+  assert.ok(!text.includes('Bearer') && !text.includes('eyJ'), '토큰을 결과에 싣지 않습니다');
+  for (const item of attempts) assert.deepEqual(Object.keys(item).sort(), ['attackId', 'expected', 'observed']);
+});
+
+test('step 3 reports a request that was not refused and unsent requests honestly', async () => {
+  fakeServer((call) => (call.path === '/api/notes' && call.method === 'GET' && call.auth
+    ? { status: 200, json: true, body: '[]' } : closedServer(call)));
+  const open = await runAttackChecks(config3);
+  assert.match(open.find((item) => item.attackId === 'forged_signature_token').observed, /^거부되지 않음: HTTP 200/u);
+  assert.match(open.find((item) => item.attackId === 'anonymous_notes_list').observed, /^거부됨/u);
+
+  fakeServer((call) => (call.path === '/api/notes' ? { status: 403, body: 'denied' } : closedServer(call)));
+  const plain = await runAttackChecks(config3);
+  assert.match(plain.at(-1).observed, /JSON이 아님/u);
+
+  globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
+  const unsent = await runAttackChecks(config3);
+  assert.equal(unsent.length, 7);
+  for (const item of unsent) assert.match(item.observed, /^미실행/u);
+});
+
+test('step 3 needs identity provider info', async () => {
+  await assert.rejects(runAttackChecks({ ...config3, identityProvider: undefined }));
 });
