@@ -1,9 +1,11 @@
-// 3단계: 로그인한 사람의 메모 조회·추가·수정·삭제를 처리하는 서버 코드입니다.
+// 3~4단계: 로그인한 사람의 메모 조회·추가·수정·삭제를 처리하는 서버 코드입니다.
 // 토큰 검사는 시작 틀의 src/verify-login.mjs를 그대로 씁니다. 브라우저가 보낸
 // userId·role·owner_id 같은 값은 읽지도 믿지도 않고, 검증을 통과한 토큰의 사용자만 인정합니다.
 // 메모를 추가할 때는 그 사용자 ID를 owner_id로 저장합니다.
-// 아직 소유자 검사는 없습니다. 로그인한 다른 사용자가 메모 번호(id)를 알면
-// 수정·삭제할 수 있는 허점이 남아 있고, 4단계에서 막습니다.
+// 4단계 소유자 검사: 읽기·수정·삭제는 DB 요청에 id와 owner_id(검증된 사용자)를 함께 걸고,
+// 돌아온 행의 owner_id도 서버가 다시 비교합니다. 남의 메모는 없는 메모와 같은 404로 답합니다.
+// 수정 본문에 소유자 값(owner_id 등)이 있으면 403으로 거부하고, 소유자는 바꾸지 않습니다.
+// DB 쪽 권한(GRANT·RLS)은 다음 제작에서 따로 다룹니다.
 // SUPABASE_URL, SUPABASE_SECRET_KEY는 Vercel 환경변수에서만 읽고
 // 응답·로그·브라우저 파일에는 절대 싣지 않습니다.
 import { randomUUID } from 'node:crypto';
@@ -35,9 +37,14 @@ async function verifyLoginWithStarterHelper(authorization) {
   return verifier(authorization);
 }
 
+const COLUMNS = 'id,owner_id,title,content';
 const toNote = (row) => ({ id: row.id, title: row.title, body: row.content });
 const isRow = (row) => typeof row?.id === 'string' && typeof row?.title === 'string'
   && typeof row?.content === 'string';
+// 돌아온 행의 주인이 검증된 사용자와 같은 경우만 인정합니다.
+const isOwnRow = (row, userId) => isRow(row) && typeof row.owner_id === 'string'
+  && row.owner_id.toLowerCase() === userId;
+const OWNER_FIELDS = ['owner_id', 'ownerId', 'owner', 'userId', 'user_id'];
 
 function cleanTitle(value) {
   return typeof value === 'string' && value.trim() && value.length <= MAX_TITLE ? value.trim() : null;
@@ -123,9 +130,9 @@ export function createCollectionHandler({ verifyLogin = verifyLoginWithStarterHe
 
     if (request.method === 'GET') {
       const result = await rest(context,
-        `?select=id,title,content&owner_id=eq.${encodeURIComponent(context.userId)}&order=created_at.asc,id.asc`);
+        `?select=${COLUMNS}&owner_id=eq.${encodeURIComponent(context.userId)}&order=created_at.asc,id.asc`);
       if (!result.ok || !Array.isArray(result.data)) return upstreamError(response, result);
-      return response.status(200).json(result.data.filter(isRow).map(toNote));
+      return response.status(200).json(result.data.filter((row) => isOwnRow(row, context.userId)).map(toNote));
     }
 
     const input = readJson(request);
@@ -157,36 +164,51 @@ export function createItemHandler({ verifyLogin = verifyLoginWithStarterHelper }
 
     const rawId = Array.isArray(request.query?.id) ? request.query.id[0] : request.query?.id;
     if (typeof rawId !== 'string' || !UUID.test(rawId)) return response.status(404).json({ error: 'NOT_FOUND' });
-    const where = `id=eq.${rawId.toLowerCase()}`;
+    // id만으로는 찾지 않습니다. 항상 검증된 사용자의 행으로 좁힙니다.
+    const where = `id=eq.${rawId.toLowerCase()}&owner_id=eq.${encodeURIComponent(context.userId)}`;
     const notFound = () => response.status(404).json({ error: 'NOT_FOUND' });
 
     if (request.method === 'GET') {
-      const result = await rest(context, `?${where}&select=id,title,content&limit=1`);
+      const result = await rest(context, `?${where}&select=${COLUMNS}&limit=1`);
       if (!result.ok || !Array.isArray(result.data)) return upstreamError(response, result);
-      const row = result.data.find(isRow);
+      const row = result.data.find((candidate) => isOwnRow(candidate, context.userId));
       return row ? response.status(200).json(toNote(row)) : notFound();
     }
 
     if (request.method === 'PUT') {
       const input = readJson(request);
+      if (input && OWNER_FIELDS.some((name) => Object.hasOwn(input, name))) {
+        return response.status(403).json({
+          error: 'OWNER_CHANGE_FORBIDDEN', message: '메모의 소유자는 바꿀 수 없습니다.',
+        });
+      }
       const changes = {};
       if (input && input.title !== undefined) changes.title = cleanTitle(input.title);
       if (input && input.body !== undefined) changes.content = cleanBody(input.body);
       if (!input || !Object.keys(changes).length || Object.values(changes).includes(null)) {
         return invalidNote(response);
       }
-      const result = await rest(context, `?${where}&select=id,title,content`, {
+      // 바꾸는 칸은 title·content뿐이라 owner_id는 그대로이고, 응답의 새 행 주인도 다시 확인합니다.
+      const result = await rest(context, `?${where}&select=${COLUMNS}`, {
         method: 'PATCH', payload: changes, prefer: 'return=representation',
       });
       if (!result.ok || !Array.isArray(result.data)) return upstreamError(response, result);
+      if (result.data.some((candidate) => !isOwnRow(candidate, context.userId))) {
+        console.error('NOTES_OWNER_MISMATCH');
+        return response.status(502).json({ error: 'NOTES_UPSTREAM_ERROR' });
+      }
       const row = result.data.find(isRow);
       return row ? response.status(200).json(toNote(row)) : notFound();
     }
 
-    const result = await rest(context, `?${where}&select=id`, {
+    const result = await rest(context, `?${where}&select=id,owner_id`, {
       method: 'DELETE', prefer: 'return=representation',
     });
     if (!result.ok || !Array.isArray(result.data)) return upstreamError(response, result);
+    if (result.data.some((candidate) => !isOwnRow({ ...candidate, title: '', content: '' }, context.userId))) {
+      console.error('NOTES_OWNER_MISMATCH');
+      return response.status(502).json({ error: 'NOTES_UPSTREAM_ERROR' });
+    }
     return result.data.length ? response.status(200).json({ id: rawId.toLowerCase() }) : notFound();
   };
 }

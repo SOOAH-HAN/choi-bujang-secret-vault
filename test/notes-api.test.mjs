@@ -41,7 +41,7 @@ function fakeSupabase(initial = []) {
     const [id, owner] = [eq('id'), eq('owner_id')];
     const hit = rows.filter((row) => (id === undefined || row.id === id)
       && (owner === undefined || row.owner_id === owner));
-    const pick = (row) => ({ id: row.id, title: row.title, content: row.content });
+    const pick = (row) => ({ id: row.id, owner_id: row.owner_id, title: row.title, content: row.content });
     if (method === 'GET') return reply(hit.map(pick));
     if (method === 'POST') {
       const row = JSON.parse(init.body);
@@ -240,6 +240,91 @@ test('hides upstream errors', async () => {
       assert.equal(res.statusCode, 502);
       assert.deepEqual(res.body, { error: 'NOTES_UPSTREAM_ERROR' });
     }
+  } finally {
+    console.error = originalError;
+  }
+});
+
+// ---- 4단계: 소유자 검사 ----
+const A_NOTE = '77777777-7777-4777-8777-777777777777';
+const B_NOTE = '88888888-8888-4888-8888-888888888888';
+const asB = as(USER_B);
+const seedAB = () => fakeSupabase([
+  { id: A_NOTE, owner_id: USER_A, title: 'A 메모', content: 'a' },
+  { id: B_NOTE, owner_id: USER_B, title: 'B 메모', content: 'b' },
+]);
+
+test('A and B each keep full access to their own notes', async () => {
+  const db = seedAB();
+  for (const [verifyLogin, id, mine] of [[asA, A_NOTE, 'A 메모'], [asB, B_NOTE, 'B 메모']]) {
+    const one = createItem({ verifyLogin });
+    const list = await call(createCollection({ verifyLogin }), { method: 'GET' });
+    assert.deepEqual(list.body.map((note) => note.title), [mine]);
+    assert.equal((await call(one, { method: 'GET', query: { id } })).body.title, mine);
+    const put = await call(one, { method: 'PUT', query: { id }, body: { title: `${mine} 수정`, body: 'x' } });
+    assert.deepEqual(put.body, { id, title: `${mine} 수정`, body: 'x' });
+    const added = await call(createCollection({ verifyLogin }), { method: 'POST', body: { title: '새 메모', body: '' } });
+    assert.equal(db.rows.find((row) => row.id === added.body.id).owner_id, verifyLogin === asA ? USER_A : USER_B);
+    assert.equal((await call(one, { method: 'DELETE', query: { id } })).statusCode, 200);
+  }
+});
+
+test('B cannot read, change, or delete A\'s note, and A\'s note stays intact', async () => {
+  const db = seedAB();
+  const one = createItem({ verifyLogin: asB });
+  const before = JSON.stringify(db.rows.find((row) => row.id === A_NOTE));
+  const attempts = [
+    { method: 'GET', query: { id: A_NOTE } },
+    { method: 'PUT', query: { id: A_NOTE }, body: { title: '탈취', body: 'x' } },
+    { method: 'DELETE', query: { id: A_NOTE } },
+  ];
+  for (const request of attempts) {
+    const res = await call(one, request);
+    assert.equal(res.statusCode, 404, request.method);
+    assert.deepEqual(res.body, { error: 'NOT_FOUND' });
+    assert.ok(!JSON.stringify(res.body).includes('A 메모'));
+  }
+  assert.equal(JSON.stringify(db.rows.find((row) => row.id === A_NOTE)), before);
+  // 남의 메모와 없는 메모는 같은 응답이라 존재 여부도 알려 주지 않습니다.
+  const missing = await call(one, { method: 'GET', query: { id: '99999999-9999-4999-8999-999999999999' } });
+  assert.deepEqual(missing.body, { error: 'NOT_FOUND' });
+  // 모든 한 건 요청은 DB에 id와 owner_id를 함께 걸었습니다.
+  for (const call of db.calls) assert.equal(call.url.searchParams.get('owner_id'), `eq.${USER_B}`);
+});
+
+test('changing the owner is refused and the owner never changes', async () => {
+  const db = seedAB();
+  const asOwnerA = createItem({ verifyLogin: asA });
+  const asOtherB = createItem({ verifyLogin: asB });
+  for (const field of ['owner_id', 'ownerId', 'userId', 'user_id']) {
+    for (const [handler, id] of [[asOwnerA, A_NOTE], [asOtherB, A_NOTE], [asOtherB, B_NOTE]]) {
+      const res = await call(handler, { method: 'PUT', query: { id }, body: { title: 't', body: 'b', [field]: USER_B } });
+      assert.equal(res.statusCode, 403, field);
+      assert.equal(res.body.error, 'OWNER_CHANGE_FORBIDDEN');
+    }
+  }
+  assert.equal(db.calls.length, 0, '소유자 변경은 DB에 닿기 전에 거부됨');
+  assert.equal(db.rows.find((row) => row.id === A_NOTE).owner_id, USER_A);
+  assert.equal(db.rows.find((row) => row.id === B_NOTE).owner_id, USER_B);
+});
+
+test('a note whose owner is missing or foreign is never shown, even if the database misbehaves', async () => {
+  const leaked = [
+    { id: A_NOTE, owner_id: USER_A, title: '남의 것', content: 'a' },
+    { id: B_NOTE, owner_id: null, title: '주인 없음', content: 'n' },
+  ];
+  globalThis.fetch = async () => new Response(JSON.stringify(leaked), { status: 200 });
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const list = await call(createCollection({ verifyLogin: asB }), { method: 'GET' });
+    assert.deepEqual(list.body, []);
+    assert.equal((await call(createItem({ verifyLogin: asB }), { method: 'GET', query: { id: A_NOTE } })).statusCode, 404);
+    const put = await call(createItem({ verifyLogin: asB }), { method: 'PUT', query: { id: A_NOTE }, body: { title: 'x' } });
+    assert.equal(put.statusCode, 502);
+    assert.ok(!JSON.stringify(put.body).includes('남의 것'));
+    const del = await call(createItem({ verifyLogin: asB }), { method: 'DELETE', query: { id: A_NOTE } });
+    assert.equal(del.statusCode, 502);
   } finally {
     console.error = originalError;
   }
