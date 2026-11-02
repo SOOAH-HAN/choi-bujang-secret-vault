@@ -4,7 +4,8 @@
 //
 // device_registered: 엔진이 등록된 기기로 확인했을 때(deviceRegistered === true)만 허용합니다.
 // 미등록이거나 값이 없거나 true가 아닌 모든 경우는 거부합니다(기본 거부).
-export const RULE_IDS = Object.freeze(['device_registered']);
+// step_up_required: 등록된 기기여도 평소와 다른 신호가 두 가지 이상 겹치면 추가 확인(step_up)을 요구합니다.
+export const RULE_IDS = Object.freeze(['device_registered', 'step_up_required']);
 
 // ---- 7단계 제작 1: 접속 정보의 출처와 모양을 검사합니다 ----
 // 신뢰하는 출처는 엔진이 검증해 넘긴 가상 접속 정보(judge_fixture)뿐입니다.
@@ -47,13 +48,43 @@ export function readStepUp(request) {
     && Number.isInteger(stepUp.authAgeSeconds) && stepUp.authAgeSeconds >= 0 && stepUp.authAgeSeconds <= 900;
 }
 
+// ---- 7단계 제작 2: 평소와 다른 접속 신호 ----
+// 신뢰할 수 있는 접속 정보(제작 1)만 봅니다. 근거가 없으면 신호도 없습니다(위험으로 단정하지 않음).
+// 신호 하나만으로는 추가 확인도 하지 않습니다. 지역 하나만으로 영구 차단하지 않기 위해서입니다.
+const USUAL_HOURS = Object.freeze({ from: 7, to: 22 });
+const HEAVY_COUNT = 10;
+const RECENT_SECONDS = 900;
+const SIGNALS_NEEDED = 2;
+
+// 사유 이름의 목록을 돌려줍니다. 응답 형식은 다섯 항목뿐이라 사유 이름은 시험과 점검에서 확인합니다.
+export function riskReasons(request) {
+  const info = readConnectionInfo(request);
+  if (!info.trusted) return [];
+  const recentCount = readRecentEvents(request)
+    .filter((event) => event.ageSeconds <= RECENT_SECONDS)
+    .reduce((sum, event) => sum + event.count, 0);
+  return [
+    info.hour < USUAL_HOURS.from || info.hour > USUAL_HOURS.to ? 'odd_hour' : null,
+    info.network === 'unusual' ? 'new_network' : null,
+    info.region === 'foreign' ? 'foreign_region' : null,
+    recentCount >= HEAVY_COUNT ? 'heavy_activity' : null,
+  ].filter(Boolean);
+}
+
 export async function decide(request) {
-  const registered = request?.deviceRegistered === true;
-  return {
+  const response = (decision, reasonCode, ruleId) => ({
     schema: 'aleph.decision.v1',
     requestId: request?.requestId,
-    decision: registered ? 'allow' : 'deny',
-    reasonCode: registered ? 'approved' : 'device_not_registered',
-    ruleIds: [RULE_IDS[0]],
-  };
+    decision,
+    reasonCode,
+    ruleIds: [ruleId],
+  });
+  if (request?.deviceRegistered !== true) return response('deny', 'device_not_registered', RULE_IDS[0]);
+  if (riskReasons(request).length >= SIGNALS_NEEDED) {
+    // 다시 확인한 요청(0~900초 안에 확인됨)은 허용하고, 아니면 추가 확인을 요구합니다.
+    return readStepUp(request)
+      ? response('allow', 'approved', RULE_IDS[1])
+      : response('step_up', 'step_up_required', RULE_IDS[1]);
+  }
+  return response('allow', 'approved', RULE_IDS[0]);
 }
