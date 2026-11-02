@@ -60,7 +60,7 @@ test('step 2 reports exposed notes and unsent requests honestly', async () => {
 
 test('rejects placeholder addresses and unsupported steps', async () => {
   await assert.rejects(runAttackChecks({ ...config, publicAppUrl: 'https://replace-me.example' }));
-  await assert.rejects(runAttackChecks({ ...config, step: 6 }));
+  await assert.rejects(runAttackChecks({ ...config, step: 7 }));
 });
 
 // ---- 3단계 ----
@@ -204,6 +204,13 @@ test('step 5 also searches public files for server key shapes without printing t
 
   globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
   const unsent = await runAttackChecks(config5);
+  assert.equal(unsent.length, 9);
+  for (const item of unsent) assert.match(item.observed, /^미실행/u);
+});
+
+test('step 6 keeps the step 5 self checks', async () => {
+  globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
+  const unsent = await runAttackChecks({ ...config5, step: 6 });
   assert.equal(unsent.length, 9);
   for (const item of unsent) assert.match(item.observed, /^미실행/u);
 });
