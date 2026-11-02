@@ -2,7 +2,17 @@
 
 이 저장소는 1단계에서 학생 본인이 GitHub 저장소와 Vercel 배포를 만드는 출발점입니다. 포함된 메모 네 건은 가상 자료입니다. 실제 학생 자료, 토큰, 비밀키를 넣지 마세요.
 
-## 6단계: 등록한 기기만 자료실에 들어옴 (현재 상태)
+## 7단계: 평소와 다른 접속은 다시 확인함 (현재 상태)
+
+- 판정기(`src/decider.mjs`)에 규칙이 둘 있습니다. `RULE_IDS`는 `['device_registered', 'step_up_required']`입니다. 기기 등록 규칙(6단계)이 먼저 적용되어 미등록 기기는 `deny`(`device_not_registered`)입니다.
+- **입력 검사**: 접속 정보(`signals`)는 엔진이 검증해 넘긴 가상 정보(`source: judge_fixture`)일 때만 믿습니다. `none`(현재 실제 경로)·모르는 출처·누락·잘못된 모양은 "근거 없음"이고, 비어 있는 값을 정상값으로 채우지 않으며 위험하다고 단정하지도 않습니다. 판정기는 헤더·쿠키·브라우저가 보낸 위치를 읽지 않습니다(위조해도 신뢰하는 정보로 올라가지 않음). `recentEvents`는 최대 12건, 모양이 틀린 항목은 버립니다.
+- **복합 이상 규칙 `step_up_required`**: 평소와 다른 시각(7~22시 밖), 낯선 네트워크(`unusual`), 다른 지역(`foreign`), 최근 15분의 활동 10건 이상 중 **두 가지 이상**이 겹치면 `step_up`(이유 `step_up_required`)입니다. 하나만으로는 허용하고, 지역 하나만으로 막지 않습니다. 이 기준(7~22시, 10건, 두 가지 이상)은 이 저장소의 가상 사건 연습에 맞춰 제가 정한 값이고, 심판이 쓰는 사건의 실제 조합은 알지 못합니다.
+- 다시 확인한 요청(`stepUp.verified`가 `true`이고 `authAgeSeconds`가 0~900)은 허용합니다. 사유 이름(`odd_hour`·`new_network`·`foreign_region`·`heavy_activity`)은 `riskReasons()`로 시험에서 확인하며, 응답 형식(다섯 항목)에는 실리지 않습니다.
+- 확인 순서(로컬 연습): `npm run decider:test`(등록 기기 통과·미등록 거부·복합 이상 접속 추가 확인·다시 확인 후 허용 네 항목이 모두 `통과`), `npm run fixture:7`(정상 사건 `allow`, 복합 이상 사건 `step_up`), `npm run test:decider`(입력 검사·규칙 시험). 가상 요청 연습이며 실제 반 엔진이나 심판의 결과가 아닙니다.
+- **확인하지 못한 것(미실행)**: 계약서에는 `stepUp`과 `step_up` 결정이 있지만, 이 저장소의 서버 함수(`/api/notes`)는 판정기를 부르지 않고 반 엔진이 새 로그인 시각을 검증하는 환경도 여기에 없습니다. 그래서 "추가 확인 전 실제 자료 차단"과 "새 로그인 뒤 요청 허용"은 측정하지 않았습니다. 제출 묶음의 직접 점검에도 미실행으로 적었습니다.
+- 5단계까지의 기능(로그인·본인 메모·DB 권한·`/aleph.json`·`nosniff`)은 그대로입니다.
+
+## 6단계: 등록한 기기만 자료실에 들어옴 (이전 단계)
 
 - 판정기(`src/decider.mjs`)에 규칙 `device_registered` 하나가 있습니다. 판정 요청의 `deviceRegistered`가 `true`일 때만 `allow`(이유 `approved`)이고, `false`이거나 값이 없거나 `true`가 아닌 모든 경우는 `deny`와 이유 `device_not_registered`입니다. 요청에서는 계약(`docs/DECIDER_REQUEST.md`)에 있는 `requestId`와 `deviceRegistered`만 읽고, `request.identity`·`device`·`role`·`geo`는 쓰지 않습니다. `RULE_IDS`는 `['device_registered']`입니다.
 - 응답은 계약의 다섯 항목(`schema`·`requestId`·`decision`·`reasonCode`·`ruleIds`)만 담습니다. 자료실 주소와 브라우저 화면은 바꾸지 않았고, 5단계까지의 기능은 그대로입니다.

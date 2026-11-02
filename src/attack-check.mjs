@@ -193,12 +193,19 @@ async function staticSecrets(app) {
 }
 
 export async function runAttackChecks(config) {
-  if (![1, 2, 3, 4, 5, 6].includes(config.step)) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
+  if (![1, 2, 3, 4, 5, 6, 7].includes(config.step)) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
   const app = appUrl(config);
   if (config.step === 1) return firstStage(config, app);
   if (config.step === 2) return secondStage(app);
   const attempts = await thirdStage(config, app);
   if (config.step >= 4) attempts.push(await directDataApi(config, app));
   if (config.step >= 5) attempts.push(await staticSecrets(app));
+  // 7단계: 판정기 규칙은 가상 사건으로 로컬에서만 시험했고, 이 저장소의 서버 함수는 판정기를 부르지 않습니다.
+  // 반 엔진이 새 로그인 시각을 검증하는 환경도 없어서, 다시 로그인 전 자료 차단과 새 요청 허용은 측정하지 않았습니다.
+  if (config.step >= 7) {
+    attempts.push({ attackId: 'step_up_real_data_block',
+      expected: '추가 확인 전에는 자료가 막히고, 새 로그인 뒤 요청은 다시 판정되어 허용됨',
+      observed: '미실행: 제공 엔진의 재로그인 확인 환경이 없어 실제 자료 차단과 새 요청 허용은 측정하지 않음' });
+  }
   return attempts;
 }
